@@ -239,10 +239,10 @@ public class Program
         }
     }
 
-    public static List<nint> MemorySearch(uint processId, long desiredValue)
+    public static List<nint> MemorySearch(uint processId, long desiredValue, int maxResults = 25000)
     {
-        ConcurrentBag<nint> result = [];
-        int valueSize = Marshal.SizeOf(valueType);
+        ConcurrentBag<nint> result = new();
+        int valueSize = Marshal.SizeOf(typeof(long));
 
         nint address = nint.Zero;
         nint handle = OpenProcess((int)(ProcessAccessFlags.PROCESS_VM_OPERATION | ProcessAccessFlags.PROCESS_VM_WRITE | ProcessAccessFlags.PROCESS_VM_READ), false, processId);
@@ -269,8 +269,15 @@ public class Program
                 long regionSize = memInfo.RegionSize.ToInt64();
 
                 // Process memory region in chunks
-                Parallel.For(0, (int)Math.Ceiling((double)regionSize / bufferSize), chunk =>
+                Parallel.For(0, (int)Math.Ceiling((double)regionSize / bufferSize), (chunk, loopState) =>
                 {
+                    // Stop further processing if maxResults is reached
+                    if (result.Count >= maxResults)
+                    {
+                        loopState.Stop();
+                        return;
+                    }
+
                     long offset = chunk * bufferSize;
                     if (offset >= regionSize)
                         return;
@@ -284,6 +291,13 @@ public class Program
 
                         for (int j = 0; j <= bytesRead - valueSize; j++)
                         {
+                            // Stop if maxResults is reached
+                            if (result.Count >= maxResults)
+                            {
+                                loopState.Stop();
+                                return;
+                            }
+
                             bool match = true;
                             for (int k = 0; k < valueSize; k++)
                                 if (buffer[j + k] != desiredBytes[k])
@@ -302,11 +316,16 @@ public class Program
                 });
             }
 
+            // Stop if maxResults is reached
+            if (result.Count >= maxResults)
+                break;
+
             address = (nint)(memInfo.BaseAddress + memInfo.RegionSize.ToInt64());
         }
 
-        return [.. result.Distinct()];
+        return result.Distinct().ToList(); // Return unique results
     }
+
 
     public static string WriteAddressValue(uint processId, nint targetPointer, long value)
     {
